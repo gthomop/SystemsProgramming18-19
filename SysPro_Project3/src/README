@@ -1,0 +1,98 @@
+Student: Ioannis Thomopoulos
+R/N: 1115201600050
+SDI: sdi1600050
+
+
+SysPro Project 3
+
+Compilation instructions:
+    (in project3 directory)
+    $ make
+    (cleaning)
+    $ make clean
+
+                                General Comments
+I chose to change the communication protocol between the clients and the server. My decision
+was to abolish strings completely and use numbers (type: short) instead. The messages are #define(d)
+in the messages.h header file, as well as the variables that hold their value, in order to pass 
+a pointer to them into the write system call. This enabled me to produce a more cleanly writen program
+and avoid the painful management needed for strings in C. Plus, this way, statically allocated
+oversized character arrays or constantly malloc'ed strings are avoided.
+
+Furthermore, I chose to add the sender's info (IP and listening port) after the sending of the 
+following messages which are the first that are send when a connection is established:
+    GET_CLIENTS <senderIP, senderListPort>
+    LOG_OFF <senderIP, senderListPort>
+    GET_FILE_LIST <senderIP, senderListPort>
+    GET_FILE <senderIP, senderListPort> <pathname, version>
+    USER_ON <serverIP, serverListPort> <clientIP, clientListPort>
+    USER_OFF <serverIP, serverListPort> <clientIP, clientListPort>
+
+I made this design decision, because I think that this way there is more security in the communications,
+since, every time a connection is established and a message is sent, a check whether the sender
+has made its presence known is made (or if the sender of USER_ON/USER_OFF is the actual server that
+was defined on the start of the program). Plus, when a client sends a LOG_OFF message to the server, the
+server cannot know which client sent this message if 2 clients run on the same machine.
+
+For the above decision to work, I needed to add a message. This is "OK". When a connection is established
+and a client_tuple is sent after the first message, the recepient checks its client_list and,
+if the sender is in there, the recepient sends OK to the sender. Otherwise, ERROR_IP_PORT_NOT_FOUND is sent,
+even though this message is only sent by the server, according to the assignment.
+Lastly, a client waits for approval when logging off. Were this not to happen, the server would crash
+when a client that was not in its client_list logged off, due to the ERROR_IP_PORT_NOT_FOUND message
+having a not-anymore-existent recepient.
+
+Poll is used widely throughout the 2 applications in order to monitor listening sockets and opened connections
+before reading/writing from/to them or closing the connections. Write() and read() are used to communicate.
+
+                                Dropbox Server
+The server stops safely when it receives a SIGINT signal, just like the client. Apart from that and the
+general comments, there is nothing special about the server.
+
+                                Dropbox Client
+The client creates the worker threads just before receiving the client tuples from the server, in order to
+avoid filling the buffer and having no one to consume the data from it. This buffer's implementation and methods
+are contained in the files buffer.h and buffer.c . The synchronised access to it is done using a mutex and 
+2 condition variables, one for the buffer being nonempty and the other being nonfull.
+The client keeps the thread IDs in a malloc'ed array. 
+Each time a GET_FILE_LIST message arrives, the client re-lists its files, so as to give the newest versions
+to the new client. This file list is a linked list with nodes being file_tuples as described in the assignment,
+and it is malloc'ed upon reception of GET_FILE_LIST and freed upon the send of all these tuples.
+The file_list is created by recursively visiting the filesystem tree using the function get_file_list() in 
+dirControl.c .
+The files received by other clients are saved in the path:
+    dir_path/__RSRVD/"IpOfOtherClient@ListeningPortOfOtherClient"/
+with "__RSRVD" being a reserved name in any dir_path just for this purpose.
+
+The buffer consists of element_t objects:
+    struct element_t {
+        file_tuple f_tuple;
+        client_tuple c_tuple;
+    }
+
+The buffer:
+    struct buffer_t{
+        element_t *circ_buffer;
+        size_t size;
+        size_t read;
+        size_t write;
+    }
+has a pointer to the array of element_t objects that is allocated at the start of the client and 3 size_t numbers.
+One for the size of the array, one for the array location from which the next read is going to be made and
+another one for the array location on which the next element will be writen.
+
+When an element_t object's f_tuple.pathname[0] is equal to 0 is when this element_t was added to the buffer by
+the main thread and its purpose is to make the presence of another client know to the worker threads.
+
+        Version: I chose to take the MD5 hash of a file each time it is asked for. The libary file needed is 
+<openssl/md5.h> and the code that I used to get that hash was found on stackoverflow.com .
+(https://stackoverflow.com/questions/10324611/how-to-calculate-the-md5-hash-of-a-large-file-in-c)
+The hash is 128 bits long, so a 32 bytes string is enough to hold it in hexademical numering.
+If a client does not have a file and is going to ask for it, it sends a 
+    struct file_tuple {
+        char pathname[129];
+        char version[33];
+    }
+instance with the version[0] being equal to 0.
+If the file it asks for exists, the MD5 hash of the file is sent in the version char array. If the other
+client computes a different MD5 hash, it sends the file. Otherwise, the message FILE_UP_TO_DATE is sent.

@@ -1,0 +1,110 @@
+Student: Ioannis Thomopoulos
+R/N: 1115201600050
+SDI: sdi1600050
+
+Compilation instuctions: If in project1 directory, type "make" to compile and "make clean"
+to delete object files and the executable file.
+
+----Important note: When running the program, as size of bucket put a multiple of 32
+greater than or equal to 32.
+Also, the bitCoinBalancesFile and TransactionsFile need each Wallet and each 
+Transaction, respectively, to be one per line. Each newline character indicates
+a new Wallet and Transaction.
+
+Design decisions:
+
+Throughout the progam, the size_t type is used instead of int in order to avoid any
+possible overflows of numbers that cannot and should not be less than zero. The
+positiveness of these numbers is explicitly taken care of so as to avoid overflow
+of size_t and have absurdly huge numbers.
+(Numbers that can take negative values are int)
+Also, struct tm and time_t types of time.h (and its functions) are widely used in the
+program so as to handle time and date I/O, access and comparison.
+Furthermore, functions from string.h are used in order to write and compare strings
+(char*).
+
+				bitCoin.h
+
+BitCoins: I have chosen to put the BitCoins in a distinct linked list in order
+	to make freeing the memory easier and avoid double freeing. Each BitCoin
+	structure contains a size_t ID, a size_t NumberOfTransactions, a pointer to
+	TransTree (root of Transaction Tree) and 2 pointers to BitCoin, previous
+	and next (linked list).
+
+TransTree: It is a binary tree(as requested) in which each node contains a pointer
+	to a Wallet, a pointer to TransList data (read TransList) and 3 pointers
+	to TransTree, parent node, right child and left child, and the  amount of
+	BitCoin transferred to the wallet(right child->walletID) or the remainder
+	of BitCoin of the initial owner (parent->walletID),if any.
+
+				wallet.h
+
+Wallets: The wallets are initially put in a fixed size array of wallets and, after,
+	the pointers to each wallets' array entry are put in an array of pointers
+	to wallets so as they are in an alphabetical order (of walletIDs)
+	in order to use binary search when searching for them before starting
+	the use of the hash tables. Each wallet contains a string (char*) WalletID,
+	a size_t amount, representing the sum of money owned by walletID, and 2 pointers
+	to BCList, first and last.
+	The number of Wallets initialized at the start of the program is saved in 
+	a global variable numOfWallets defined in wallet.h
+
+BCList: This structure is the item type of a list of BitCoins owned by a Wallet. This
+	is needed because a BitCoin can be owned by multiple Wallet Ids. Each item of
+	this list contains 2 pointers to BCList, one to the previous and one to the
+	next, a pointer to BitCoin (thisBC) and a size_t amount of money of thisBC
+	owned by walletID.
+
+	Example: WalletID John and WalletID George both own part of BitCoin with ID 12
+	and they are the only owners of it. John's wallet contains a pointer to a BCList
+	which contains a pointer to BitCoin 12 (whose value we suppose is 100) and 
+	a size_t amountOf == 35. Respectively, George's wallet contains a pointer to
+	a BCList which contains a pointer to BitCoin 12 and a size_t
+	amountOf == BitCoins 12 Value - John's AmountOF == 100 - 35 == 65.
+
+	Size_t amount in each Wallet is the sum of all amountOf variables in each
+	BCList of a Wallet.
+
+				transaction.h
+
+Transaction: This structure contains data of a transaction, but not all, in order to avoid
+	data duplication. The data inside a struct Transaction is a string (char*) of
+	the transaction ID, a size_t value (of the transaction) and a time_t dateTime
+	variable that states when the transaction took place.
+
+	Example: This is a line of transactionsFile:
+	-------------------->112 John George 10 15-02-2019 13:37<-------------------
+	A struct Transaction is created and ID string becomes "112", value equals to 10
+	and dateTime equals to 1550237820 (after conversion of a struct tm using timegm).
+
+	Also, there is a global string (char maxID[15]) variable and a global time_t
+	variable (lastDateTime) which contain the biggest ID (in string conversion numbers)
+	and the time_t of the last transaction successfully added, respectively.
+
+				hashTable.h
+
+HashTable: This is a structure that holds an array (HashTable) of pointers to HashedItem
+	(see below) (Table), a size_t numOfEntries, which indicates how many entries the
+	Table has and size_t bucketSize which is set by the user on startup.
+
+HashedItem: This is the structure of each item of a bucket. It is 32 bytes long
+	(contains 4 pointers) and contains 4 records. These are a string (walletID),
+	a HashedItem pointer to the nextItem of the bucket (or the next bucket if it is
+	the last item of the bucket) and 2 pointers to TransList structures (see below),
+	the first TransList and the last TransList.
+
+TransList: This is the structure of each item of a transaction list. Each HashedItem has
+	a Transaction List which is the list of all transactions in which the walletID
+	is either the sender (if HashedItem is in senderHashTable) or the receiver (if 
+	HashedItem is in receiverHashTable). This structure contains 2 pointers to
+	TransList (next, previous), a pointer to Transaction data (which also exists in
+	the other HashTable) and a pointer to a Wallet which is the wallet of the 
+	said Transaction's receiver (if in senderHashTable) or sender (if in
+	receiverHashTable).
+
+Credits to:
+	Dan J. Bernstein for the hash function found on:
+	http://www.cse.yorku.ca/~oz/hash.html
+
+	and Aman Goel of https://hackr.io/ for the alternative mergesort algorithm:
+	https://hackr.io/blog/merge-sort-in-c

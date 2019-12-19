@@ -1,0 +1,120 @@
+Student: Ioannis Thomopoulos
+R/N: 1115201600050
+SDI: sdi1600050
+
+                                                Mirror Client
+Compilation instructions: (in project2/mirror_client directory after untaring)
+    $ make
+(to clean the object files and executables)
+    $ make clean
+
+Important note: A client cannot have IDs less or equal to 0. (see sync.c)
+
+Design: 
+    -main.c: This is the main file that makes all the necessary checks about the directories and files used by a client.
+It makes use of the function CmdParams use(int argc, char **argv) in order to parse the arguments passed to the program
+at its start. Then creates all necessary directories (mirror, input) and files (.id file, log file). If any of them exists
+(except for the log file) it frees any allocated data and exits with error.
+Opens the log file in file descriptor 1 (stdout) in order to make easier the writing to the log file by child processes.
+After everything is correctly set up, the client goes into the "synching mode", which starts by calling the function
+client_id check_common_dir(client *cl) declared in clientSync.h . Whenever this function returns a value less than 0
+but not equal to -2 in main, the program exits because it received a SIGINT or SIGQUIT signal. If this value is 
+greater than zero or -2, a child process has been forked in either synch or check_for_deleted_clients functions.
+(see clientSync.c)
+
+    -clientSync.h: Declares the struct "client" and the struct "children_list". The first one is the struct that holds
+all relevant-to-a-client data (id, directories' paths, child processes created) and the second one is a list containing
+information about child processes that have been created by the client for synching purposes. (info about child processes
+created for directory deletion are not saved anywhere) The second struct contains the process id of the child process, the
+ID of the client that this process was created to_sync_with, the times a process has tried to sync with this client and
+the previous/next node of the list. Furthermore, in this file, there are 2 type definitions that serve for code readability.
+
+    -clientSync.c: This code keeps track of the common directory ( client_id check_common_dir(client *cl) ). A self-pipe
+is opened for communication with the child processes that fail to synchronize (see below.) If a new .id file has showed up, 
+the client tries to sync with this client ( client_id synch(char *new_client_id, client *cl, int tries) ).
+It forks a new child process and saves its process id in the children_list struct. ( void add_pid(client *cl, pid_t pid, char\
+*to_sync_with) ) After this, the client process returns to check_common_dir function and keeps checking the common_dir.
+Then, checks whether a child process has sent a signal SIGUSR1. If so, then retries synchronizing with the other client again, but
+up to 3 times. ( client_id retry(client *cl, pid_t sent_usr1) ). After that, waits 3 seconds and then checks whether a
+previously synched with client has stopped working. ( int check_for_deleted_clients(client *cl) ) If so, a new child process is
+created and it erases the mirror directory containinig a copy of the other client's files. check_common_dir function returns
+the client_id with which this client is going to synchronize, after execl() in int main(). The synchronizations and their
+retries are carried out only after successful checks in the functions below:
+        +int times_tried(client *cl, char *to_sync_with): returns the number of previous tries to synchronize with the client 
+    with id to_sync_with.
+        +int already_synced(client *cl, char *new_id): returns True (1) if there is already a pid of a process trying or having
+    tried to synchronize with the client with id new_id.
+
+The functions: 
+        +void remove_list_node(client *cl, children_list *curr_child): Erases a children_list entry
+        +void free_client(client *cl): Frees the allocated memory of the client struct (strings and children_list)
+        +void delete_on_exit(client *cl): Deletes the .id file and the mirror directory of the client after a SIGINT/SIGQUIT
+    signal has been received.
+        +void free_on_exec(client *cl): Frees all of the children_list
+        +void kill_processes(client *cl): Sends a SIGUSR1 signal to every child process before exiting in order for them
+    to finish normally. (may take some time because of sleep(1) after every kill call to avoid having orphan processes)
+are all reponsible for memory management and filesystem management before an exec or the client exit occur.
+
+The functions:
+        +int delete_client(char *id_to_delete, client *cl): Deletes the mirror directory of a client that has stopped.
+        +void delete_entry(client *cl, char *id_to_delete): Deletes the children_list entry of a client that has stopped.
+are called when a previously synched with client has been observed to have stopped in check_for_deleted_clients.
+
+    -dirControl.c: Functions in this file are widely used throughout the code of the client and ease the work needed to keep
+consistency between file paths and make directory control jobs easier.
+        +int remove_dir(char *dir_path): Recursively erases the directory sitting at dir_path.
+        +int is_dir(char *path): Returns True (1) if the file in path is a directory.
+        +char *get_fifo_name(char *common_dir_path, char *id1, char *id2): Returns a string that contains the path to the fifo
+    used by sync_send and sync_receive.
+        +char *append_to_rel_path(char *cwd, char *path_to_append): Returns a string containing the two arguments concatenated
+    with a slash '/'
+
+    -sync.c: This is the code that is executed after the execl syscall in main.c. Forks 2 child processes, one for sending and
+one for receiving files to/from the client with id argv[2]. If either one of them finished with an error, a signal SIGUSR1 is sent
+to the other in order to terminate it peacefully. If a signal is sent to this process itself and it is a SIGUSR1, it terminates all
+2 child processes peacefully, because it means that the client wants to stop. If an error occurs anywhere in this and the children 
+processes, the main function in sync.c sends a SIGUSR1 signal to the parent process (client), writes into the self-pipe opened
+in check_common_dir function (using file descriptor 0) its process id and returns the id of the client with which it ould not synch
+successfully. If everything goes to plan, sync returns 0. The id not equal to 0 limitation is merely symbolic, but of importance, for 
+code readability and debugging. (in retry function: is the WEXITSTATUS(status) the id of a client or the symbolic return value of sync
+for success?)
+When the client process receives a signal from sync process, sets its sync_flag to 2. When time comes, reads the pid
+of the sync process and tries again, if it is not the third time.
+
+    -sync_send.c: Creates and deletes the fifo pipe. Waits 40 seconds before exiting with error, if in this interval the other
+end of the fifo (read) is still closed. This is necessary because the reading end could fail either mkfifo or open syscalls for
+some strange reason for 3 times. If the writer blocked indefinitely, then the client trying to send files would never be informed
+about this error.
+
+    -sync_receive.c: An empty directory is identified by the slash '/' at the end of its path.
+
+Note: 
+    -the self-pipe is used instead of getting process ids with siginfo_t because in some parts of the code, signals need
+to be blocked, and if two or more SIGUSR1 signals are sent while they are blocked, they would be merged and lost.
+
+    -both sync_send and sync_receive open the fifos in blocking mode to avoid race conditions such as the reader trying to read
+before the writer could even write something. This could happen often if, for example, the buffer size was big.
+
+
+                                                create_infiles.sh
+Run: As stated in the project assignment.
+
+Design: Declare a variable (string) containing all possible characters a name/file could include. Compiles (if not already) a .c
+file (fill_file.c) which is a C program that fills a file with alphanumeric characters randomly.
+Function random_name() creates a random directory/file name using the $RANDOM internal bash function 
+(https://stackoverflow.com/questions/8988824/generating-random-number-between-1-and-10-in-bash-shell-script)
+
+Checks whether all the necessary arguments are declared and checks their validity. Creates an array 
+(https://linuxconfig.org/how-to-use-arrays-in-bash-script) which holds the directory names in order to reiterate them
+when creating the files.
+
+Creates all the directories while saving their names in the before mentioned array. After that, the script iterates the
+array and creates a file per iteration. When the array's end is reached, it starts again. (Round Robin)
+
+                                                get_stats.sh
+Run: As stated in the project assignment.
+
+Design: Reads line by line the input given in stdin. If nothing has been given, prints an error message.
+Declares the variables reponsible for counting all the requested stats.
+Extensive use of the awk command takes place, in order to tokenize the lines of the log files.
+Also, tr command is used in order to remove a character from a certain tokenized word.
